@@ -1,4 +1,4 @@
-# Enrichment API on GKE — Progressive Delivery & Secure Supply Chain (DevOps Deep Dive)
+# App Deployment on GKE 
 
 > A from‑scratch, production‑oriented guide to build, scan, sign, and deploy a Flask API to **Google Kubernetes Engine (GKE)** using **Artifact Registry** and **GitHub Actions** with **Workload Identity Federation** (no long‑lived keys). Includes resilience, security, automation, and rollback.
 
