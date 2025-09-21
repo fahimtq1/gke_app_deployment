@@ -1,42 +1,79 @@
-# A simple Flask-based transaction enrichment API
-# We'll use this to demonstrate Kubernetes features like health checks and scaling.
+# api.py
+# Flask-based Enrichment API with Prometheus metrics and structured logging
+
 import os
+import time
+import json
+import logging
+from logging import StreamHandler
 from flask import Flask, jsonify, request
-from prometheus_client import generate_latest, Counter, Histogram
+from prometheus_client import generate_latest, Counter, Histogram, CONTENT_TYPE_LATEST
+
+APP_NAME = "enrichment-api"
+APP_VERSION = os.environ.get("APP_VERSION", "v1.0.0")
 
 app = Flask(__name__)
 
-# Prometheus metrics for RED (Rate, Errors, Duration)
-REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP Requests', ['method', 'endpoint', 'status'])
-API_LATENCY_HIST = Histogram('http_request_duration_seconds', 'HTTP Request Duration', ['endpoint'])
+# -------- Structured logging (JSON) ----------
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        log_record = {
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "time": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "app": APP_NAME,
+            "version": APP_VERSION,
+        }
+        if record.exc_info:
+            log_record["exc_info"] = self.formatException(record.exc_info)
+        return json.dumps(log_record)
 
-@app.route('/')
-@API_LATENCY_HIST.labels(endpoint='/').time()
+handler = StreamHandler()
+handler.setFormatter(JsonFormatter())
+app.logger.handlers = []
+app.logger.addHandler(handler)
+app.logger.setLevel(logging.INFO)
+
+# -------- Prometheus metrics (RED) ----------
+REQUEST_COUNT = Counter(
+    "http_requests_total", "Total HTTP Requests", ["method", "endpoint", "status"]
+)
+API_LATENCY = Histogram(
+    "http_request_duration_seconds", "HTTP Request Duration", ["endpoint"]
+)
+
+@app.route("/")
+@API_LATENCY.labels(endpoint="/").time()
 def index():
-    """A basic endpoint for the API."""
-    REQUEST_COUNT.labels(method='GET', endpoint='/', status='200').inc()
-    return jsonify({"message": "Hello from the Enrichment API!"}), 200
+    REQUEST_COUNT.labels(method="GET", endpoint="/", status="200").inc()
+    return jsonify({"message": "Hello from the Enrichment API!", "version": APP_VERSION}), 200
 
-@app.route('/healthz')
+@app.route("/healthz")
 def healthz():
-    """Liveness and readiness probe endpoint."""
-    return 'ok', 200
+    # Lightweight check used by liveness/readiness probes
+    return "ok", 200
 
-@app.route('/enrich', methods=['POST'])
-@API_LATENCY_HIST.labels(endpoint='/enrich').time()
+@app.route("/enrich", methods=["POST"])
+@API_LATENCY.labels(endpoint="/enrich").time()
 def enrich():
-    """An endpoint that simulates a transaction enrichment."""
-    data = request.get_json()
-    if not data or 'transactionId' not in data:
-        REQUEST_COUNT.labels(method='POST', endpoint='/enrich', status='400').inc()
+    data = request.get_json(silent=True) or {}
+    tx_id = data.get("transactionId")
+    if not tx_id:
+        REQUEST_COUNT.labels(method="POST", endpoint="/enrich", status="400").inc()
         return jsonify({"error": "Missing transactionId"}), 400
-    
-    # Simulate some work
-    import time
-    time.sleep(0.1)
 
-    REQUEST_COUNT.labels(method='POST', endpoint='/enrich', status='200').inc()
-    return jsonify({"enriched_transaction": f"Enriched transaction {data['transactionId']}"}), 200
+    # Simulate work (e.g., enrichment call)
+    time.sleep(0.05)
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=os.environ.get('PORT', 8080))
+    REQUEST_COUNT.labels(method="POST", endpoint="/enrich", status="200").inc()
+    return jsonify({"enriched_transaction": f"Enriched transaction {tx_id}"}), 200
+
+@app.route("/metrics")
+def metrics():
+    # Expose Prometheus metrics
+    return generate_latest(), 200, {"Content-Type": CONTENT_TYPE_LATEST}
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "8080"))
+    app.run(host="0.0.0.0", port=port)

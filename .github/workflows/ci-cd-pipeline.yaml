@@ -1,0 +1,88 @@
+name: CI/CD - Enrichment API
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  GAR_LOCATION: us-central1            # change if needed
+  REPO_NAME: docker-repo               # your Artifact Registry repo
+  IMAGE_NAME: enrichment-api
+  CLUSTER_NAME: enrichment-api-cluster # your GKE cluster name
+  CLUSTER_LOCATION: us-central1-c      # your GKE zone or region
+
+jobs:
+  build-scan-sign-deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write   # needed for WIF and Cosign keyless
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup gcloud auth (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Setup gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker $GAR_LOCATION-docker.pkg.dev --quiet
+
+      - name: Compute image tag
+        id: meta
+        run: |
+          IMAGE="$GAR_LOCATION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPO_NAME/$IMAGE_NAME:${{ github.sha }}"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        run: |
+          docker build -t "${{ steps.meta.outputs.image }}" .
+          docker push "${{ steps.meta.outputs.image }}"
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.meta.outputs.image }}
+          format: 'table'
+          exit-code: '1'      # fail on HIGH/CRITICAL by default
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+
+      - name: Cosign keyless sign
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          wget -q -O cosign.tgz https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64.tar.gz
+          tar -xzf cosign.tgz
+          sudo mv cosign /usr/local/bin/cosign
+          cosign version
+          cosign sign --yes ${{ steps.meta.outputs.image }}
+
+      - name: Get GKE credentials
+        run: |
+          gcloud container clusters get-credentials "$CLUSTER_NAME" --zone "$CLUSTER_LOCATION"
+
+      - name: Create namespace if missing
+        run: |
+          kubectl get ns enrichment || kubectl create ns enrichment
+
+      - name: Apply base manifests (safe, idempotent)
+        run: |
+          kubectl apply -f k8s-manifests.yaml
+
+      - name: Update Deployment image (progressive rollout)
+        run: |
+          kubectl set image deployment/enrichment-api \
+            enrichment-api=${{ steps.meta.outputs.image }} \
+            -n enrichment
+          kubectl rollout status deployment/enrichment-api -n enrichment --timeout=120s

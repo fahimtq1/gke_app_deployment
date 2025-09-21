@@ -1,139 +1,151 @@
-#
-# This file defines all the core Kubernetes resources for our Enrichment API.
-# It includes a Deployment, a Service, an HPA, a PDB, and a NetworkPolicy.
-#
-
+# k8s-manifests.yaml
 ---
-# 1. Kubernetes Deployment
-# This resource manages the application's stateless pods.
-# It includes liveness and readiness probes for health checks.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: enrichment
+  labels:
+    name: enrichment
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: enrichment-api
+  namespace: enrichment
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: enrichment-api-deployment
+  name: enrichment-api
+  namespace: enrichment
   labels:
     app: enrichment-api
 spec:
-  replicas: 2
+  replicas: 3
+  revisionHistoryLimit: 5
   selector:
     matchLabels:
       app: enrichment-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:
         app: enrichment-api
+      annotations:
+        # Prometheus scrape hints (if you add Prometheus later)
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
     spec:
-      # Pod-level security context
+      serviceAccountName: enrichment-api
       securityContext:
+        runAsNonRoot: true
         runAsUser: 1001
         runAsGroup: 1001
         fsGroup: 1001
-        runAsNonRoot: true
       containers:
-      - name: enrichment-api
-        # REPLACE THIS WITH YOUR IMAGE URL
-        image: us-central1-docker.pkg.dev/ornate-reef-469712-m8/docker-repo/enrichment-api:v1.0.1
-        ports:
-        - containerPort: 8080
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "128Mi"
-          limits:
-            cpu: "500m"
-            memory: "512Mi"
-        livenessProbe:
-          # Checks if the container is still running and responsive.
-          # If it fails, Kubernetes will restart the container.
-          httpGet:
-            path: /healthz
-            port: 8080
-          initialDelaySeconds: 15
-          periodSeconds: 20
-        readinessProbe:
-          # Checks if the container is ready to serve traffic.
-          # The Service will not route traffic to a pod until this probe succeeds.
-          httpGet:
-            path: /healthz
-            port: 8080
-          initialDelaySeconds: 5
-          periodSeconds: 10
-        # Container-level security context
-        securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          
-
+        - name: enrichment-api
+          image: IMAGE_HERE
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: APP_VERSION
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['kubectl.kubernetes.io/restartedAt']
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
 ---
-# 2. Kubernetes Service
-# A Service exposes the application to the network.
-# It automatically routes traffic to the healthy pods in the Deployment.
 apiVersion: v1
 kind: Service
 metadata:
-  name: enrichment-api-service
+  name: enrichment-api
+  namespace: enrichment
+  labels:
+    app: enrichment-api
 spec:
+  type: LoadBalancer
   selector:
     app: enrichment-api
   ports:
-    - protocol: TCP
+    - name: http
       port: 80
       targetPort: 8080
-  type: LoadBalancer # Exposes the service with a public IP
-
 ---
-# 3. Horizontal Pod Autoscaler (HPA)
-# Automatically scales the number of pods based on CPU utilization.
-# This ensures the application can handle traffic spikes efficiently.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: enrichment-api-hpa
+  name: enrichment-api
+  namespace: enrichment
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: enrichment-api-deployment
+    name: enrichment-api
   minReplicas: 2
   maxReplicas: 10
   metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 70
-
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
 ---
-# 4. PodDisruptionBudget (PDB)
-# Protects the application by ensuring a minimum number of pods are available
-# during voluntary disruptions like node maintenance or scaling events.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: enrichment-api-pdb
+  name: enrichment-api
+  namespace: enrichment
 spec:
   minAvailable: 1
   selector:
     matchLabels:
       app: enrichment-api
-
 ---
-# 5. Network Policy
-# A security measure to restrict ingress traffic.
-# This policy only allows traffic to the pods from the same namespace.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: enrichment-api-policy
+  name: enrichment-api-allow-http
+  namespace: enrichment
 spec:
   podSelector:
     matchLabels:
       app: enrichment-api
-  policyTypes:
-  - Ingress
+  policyTypes: ["Ingress"]
   ingress:
-  - from:
-    - podSelector:
-        matchLabels:
-          app: enrichment-api
+    - ports:
+        - protocol: TCP
+          port: 8080

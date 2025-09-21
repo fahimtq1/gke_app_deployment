@@ -1,29 +1,29 @@
-# Use the official lightweight Python image.
-FROM python:3.9-slim
+# Dockerfile
+FROM python:3.11-slim
 
-# Create a non-root user and group with explicit UID/GID
-# Using a fixed UID/GID helps with permission management in Kubernetes
-RUN addgroup --gid 1001 appgroup && \
-    adduser --uid 1001 --gid 1001 --home /app --shell /bin/sh --disabled-password appuser
+# System prep: non-root user
+RUN addgroup --gid 1001 appgroup \
+ && adduser --uid 1001 --gid 1001 --home /app --shell /bin/sh --disabled-password appuser
 
-# Set working directory to /app
 WORKDIR /app
 
-# Copy the requirements file and install dependencies
-COPY requirements.txt requirements.txt
+# Leverage Docker layer caching
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application code
+# Copy app
 COPY . .
 
-# Change ownership of the application files to the non-root user
+# Permissions
 RUN chown -R appuser:appgroup /app
 
-# Expose the port the app runs on
-EXPOSE 8080
+ENV PORT=8080 \
+    APP_VERSION=v1.0.0 \
+    PYTHONUNBUFFERED=1
 
-# Switch to the non-root user
+EXPOSE 8080
 USER appuser
 
-# Run the application
-CMD ["python", "api.py"]
+# Gunicorn: 2 workers + 2 threads per core-ish is fine for demo; tune for prod
+# Timeout short to surface probe issues quickly; keepalive reduces LB churn.
+CMD ["gunicorn", "-w", "2", "--threads", "2", "-b", "0.0.0.0:8080", "--timeout", "30", "--keep-alive", "5", "api:app"]

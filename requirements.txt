@@ -1,2 +1,3 @@
-flask
-prometheus_client
+flask==3.0.3
+prometheus_client==0.20.0
+gunicorn==21.2.0
