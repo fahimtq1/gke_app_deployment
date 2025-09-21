@@ -316,24 +316,6 @@ For **canary/blue‑green**:
 
 ---
 
-## Troubleshooting
-**External IP pending**:
-- Ensure the cluster has an external load balancer quota and the Service type is `LoadBalancer`.
-
-**Image pull errors**:
-- Check image URL/region and that nodes can access Artifact Registry. If using private AR with VPC‑SC, configure accordingly.
-
-**HPA not scaling**:
-- Ensure metrics server is enabled on the cluster (Autopilot/most standard clusters include it). Verify with `kubectl get apiservices | grep metrics`.
-
-**Pipeline fails on Trivy**:
-- Read the job output; update deps or add fixed versions. Avoid ignoring critical vulnerabilities without compensating controls.
-
-**WIF/OIDC auth errors**:
-- Confirm `GCP_WORKLOAD_IDENTITY_PROVIDER` value and that `roles/iam.workloadIdentityUser` binding matches your `<ORG>/<REPO>`.
-
----
-
 ## Cost Notes
 - GKE clusters, load balancers, and egress traffic incur costs. Use small node pools, Autopilot, or scale to zero by deleting the Service when idle.
 
@@ -352,18 +334,3 @@ gcloud artifacts repositories delete docker-repo --location us-central1
 ```
 
 ---
-
-## Git Commands
-```bash
-git init
-git add .
-git commit -m "Enrichment API on GKE: secure CI/CD"
-git branch -M main
-git remote add origin https://github.com/<your-username>/<your-repo>.git
-git push -u origin main
-```
-
----
-
-## License
-MIT (or your preference).

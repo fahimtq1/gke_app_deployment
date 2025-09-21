@@ -49,7 +49,7 @@ spec:
         fsGroup: 1001
       containers:
         - name: enrichment-api
-          image: IMAGE_HERE
+          image: us-central1-docker.pkg.dev/ornate-reef-469712-m8/docker-repo/enrichment-api:v1.0.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
